@@ -2,8 +2,6 @@
 
 A utility for abstracting away names and places for file-like data storage.
 
----
-
 Lein (Uses [Break Versioning](https://github.com/ptaoussanis/encore/blob/master/BREAK-VERSIONING.md)):
 ```
 [org.clojars.mjdowney/schemata "1.0.0"]
@@ -13,8 +11,6 @@ Run tests with
 ```
 lein test
 ```
-
----
 
 I originally wrote this for use with a market data collection server that 
 produced thousands of flat files per day — each named to indicate the trading 
@@ -26,8 +22,6 @@ implemented in a way that's generally usable.
 
 (Check out the [S3 context implementation](https://github.com/matthewdowney/schemata-s3) 
 to use with syncing files.)
-
----
 
 Naming revolves around the `NamingConvention` protocol, which defines a
 bidirectional relationship between a file's specification and a file path.
