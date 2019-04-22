@@ -4,12 +4,13 @@
     :author "Matthew Downey"}
   schemata.core
   (:require [clojure.string :as string]
-            [clojure.java.io :as io])
-  (:refer-clojure :exclude [list])
+            [clojure.java.io :as io]
+            [clojure.test :refer :all])
+  (:refer-clojure :exclude [list resolve])
   (:import (java.io File)
            (java.text SimpleDateFormat)
-           (java.util TimeZone Date)
-           (clojure.lang IDeref)))
+           (java.util TimeZone Date UUID)
+           (clojure.lang IDeref ExceptionInfo)))
 
 (set! *warn-on-reflection* true)
 
@@ -142,6 +143,10 @@
      :out (fn [attrs]
             (str ((:out base') attrs) "." ((:out ext') attrs)))}))
 
+;; TODO: Some way to partially render a path convention to use as a search
+;;       prefix. Something that lets spec->path use a partial spec and return
+;;       either ["path" "parts" "x.log"] on success or
+;;       {::partial ["path" "parts" {::partial "x"}]}
 (defn path-convention
   "Create a naming convention from different path parts, the last of which
   is the file's base name & extension.
@@ -162,11 +167,13 @@
   files."
   (io [this spec]
     "Get an IOFactory for the data described by `spec`.")
-  (in-context [this spec]
-    "Puts the spec 'in context' by rendering its path in a way appropriate
-    for the context. Useful for REPL exploration.")
-  (delete [this spec]
-    "Delete the file described by `spec`.")
+  (resolve [this spec]
+    "Resolve the spec by rendering its path in a way appropriate for the
+    context. Useful for REPL exploration.")
+  (delete [this] [this spec]
+    "In the one-arg version, delete the context root after checking that
+    there's nothing under it. In the two-arg version, delete the file
+    described by `spec`.")
   (info [this spec]
     "Whatever information is available. Recommended to include
     {:size          <n bytes>
@@ -191,9 +198,32 @@
       (io/make-parents f)
       f))
 
-  (in-context [this spec]
+  (resolve [this spec]
     (let [f (->file root naming-convention spec)]
       (.getCanonicalPath f)))
+
+  (delete [this]
+    (let [things-under-root (try
+                              (into [] (list this {:strict? true}))
+                              (catch Throwable t t))]
+      ;; When there are not file items under the root, recursively delete
+      ;; the directory structure
+      (cond
+        (instance? Exception things-under-root)
+        (-> "Couldn't verify that context was empty before deletion."
+            (ex-info {} #_things-under-root)
+            (throw))
+
+        (not-empty things-under-root)
+        (-> "Cannot delete context; it's not empty."
+            (ex-info {:contains things-under-root})
+            (throw))
+
+        :else
+        (doseq [dir (tree-seq #(.isDirectory ^File %)
+                              #(.listFiles ^File %)
+                              (io/file root))]
+          (.delete ^File dir)))))
 
   (delete [this spec]
     (.delete (->file root naming-convention spec)))
@@ -213,12 +243,18 @@
         ;; Depth-first search of all files under the root directory
         (tree-seq #(.isDirectory ^File %) #(.listFiles ^File %) (io/file root))
         ;; Keep only the files (no partial paths)
-        (filter #(not (.isDirectory ^File %)))
+        (filter #(.isFile ^File %))
         ;; Read 'em in
         (map #(try
                 (path->spec naming-convention (file->path %))
                 (catch Exception e (when strict? (throw e)))))
         (filter some?)))))
+
+(defn- path-relative-to [root path]
+  (str
+    (.relativize
+      (.toPath (io/file root))
+      (.toPath (io/file path)))))
 
 (defn local-context
   "A `Context` that discovers files & performs IO on the local filesystem.
@@ -228,8 +264,6 @@
 
   The `root` is a relative path to the directory under which the given
   `naming-convention` applies."
-  ([]
-   (local-context nil))
   ([root]
    (local-context
      root
@@ -240,7 +274,7 @@
              (update parts 0 #(str File/separator %))
              parts)))
        (path->spec [_ path]
-         (string/join File/separator path)))))
+         (path-relative-to (or root ".") (string/join File/separator path))))))
   ([root naming-convention]
    (->LocalContext root naming-convention)))
 
@@ -265,3 +299,106 @@
   (with-open [in-stream (io/input-stream (io from-context from-spec))
               out-stream (io/output-stream (io to-context to-spec))]
     (io/copy in-stream out-stream)))
+
+;;; A helper for tests, put here so that it can also be invoked by
+;;; other libraries
+
+(defn test-with
+  "Test all of the `Context` methods on two files of the same or different
+  contexts. Must be run within a `clojure.test/deftest.
+
+  Each file is a map composed of
+    - :context    A Context implementation.
+    - :spec       A file spec for the :context.
+    - :resolved   The expected response for (resolve :context :spec).
+    - :desc       A quick description, e.g. 'default local context'.
+
+  Note that the given :contexts must be empty (use a test directory)."
+  [{:keys [context spec resolved desc] :as file-a} file-b]
+  (println "\nTesting context implementations with IO...")
+  (assert (= #{:context :spec :resolved :desc} (set (keys file-a))))
+  (assert (= #{:context :spec :resolved :desc} (set (keys file-b))))
+  (assert (not= file-a file-b) "The given files are distinct.")
+
+  (testing "The given test contexts are empty."
+    (is (empty? (list (:context file-a) {:strict? true})))
+    (is (empty? (list (:context file-b) {:strict? true}))))
+
+  (testing "The given specs resolve correctly."
+    (is (= (resolve (:context file-a) (:spec file-a)) (:resolved file-a)))
+    (is (= (resolve (:context file-b) (:spec file-b)) (:resolved file-b))))
+
+  (testing "One-by-one tests for each of the given test files."
+    (doseq [f [file-a file-b]]
+      (let [io' (io (:context f) (:spec f))
+            path (resolve (:context f) (:spec f))]
+        (testing (format "Write / read with %s" (:desc f))
+          (println (format "Writing to %s..." path))
+          (spit io' "foo\n")
+          (is (= (slurp io') "foo\n")))
+
+        (testing (format "Overwrite / read with %s" (:desc f))
+          (println (format "Overwriting %s..." path))
+          (spit io' "bar\n")
+          (is (= (slurp io') "bar\n")))
+
+        (testing (format "Append / read with %s" (:desc f))
+          (println (format "Appending to %s..." path))
+          (spit io' "baz\n" :append true)
+          (is (= (slurp io') "bar\nbaz\n")))
+
+        (testing (format "File info with %s" (:desc f))
+          (let [{:keys [last-modified size] :as init-info} (info (:context f) (:spec f))]
+            (println "Got file info of" init-info)
+            (when last-modified
+              (is (> 5000 (- (System/currentTimeMillis) last-modified))
+                  "Last modified in the last 5 seconds."))
+
+            (when size
+              (is (= size 8) "8 bytes written.")))))))
+
+  (testing "File discovery"
+    (if (= (:context file-a) (:context file-b))
+      (let [discovered (set (list (:context file-a)))]
+        (println "Discovered files" discovered)
+        (is (= discovered (set (map :spec [file-a file-b])))))
+      (let [discovered-a (set (list (:context file-a)))
+            discovered-b (set (list (:context file-b)))]
+        (println "Discovered files" discovered-a)
+        (is (= discovered-a #{(:spec file-a)}))
+        (println "Discovered files" discovered-b)
+        (is (= discovered-b #{(:spec file-b)})))))
+
+  (testing "Copying"
+    ;; Test copying in both directions
+    (doseq [[from to] [[file-a file-b] [file-b file-a]]]
+      (testing (format "(from %s to %s)" (:desc from) (:desc to))
+        (let [unique-string (str (UUID/randomUUID))]
+          (println (format "Writing %s to %s, then copying to %s..."
+                           unique-string
+                           (resolve (:context from) (:spec from))
+                           (resolve (:context to) (:spec to))))
+          (spit (io (:context from) (:spec from)) unique-string)
+          (copy (:spec from) (:spec to) (:context from) (:context to))
+          (is (= (slurp (io (:context to) (:spec to))) unique-string))))))
+
+  (testing "Deleting"
+
+    (is (thrown-with-msg? ExceptionInfo #"Cannot delete context; it's not empty."
+                          (delete (:context file-a)))
+        "We are only allowed to delete empty contexts.")
+    (is (thrown-with-msg? ExceptionInfo #"Cannot delete context; it's not empty."
+                          (delete (:context file-b)))
+        "We are only allowed to delete empty contexts.")
+
+    (println "Cleaning up and deleting files/context(s)...")
+    (doseq [f [file-a file-b]]
+      (println (format "Deleting %s..." (resolve (:context f) (:spec f))))
+      (delete (:context f) (:spec f)))
+
+    (is (empty? (list (:context file-a))) "Context emptied.")
+    (is (empty? (list (:context file-b))) "Context emptied.")
+
+    (doseq [f [file-a file-b]]
+      (println (format "Deleting context (%s)" (:desc f)))
+      (delete (:context f)))))

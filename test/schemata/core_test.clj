@@ -1,10 +1,9 @@
 (ns schemata.core-test
-  (:refer-clojure :exclude [list])
+  (:refer-clojure :exclude [list resolve])
   (:require [clojure.test :refer :all]
             [schemata.core :refer :all]
             [schemata.core :as s]
-            [clojure.java.io :as io])
-  (:import (java.io File)))
+            [clojure.java.io :as io]))
 
 (deftest utc-test
   (let [format "yyyy-MM-dd'T'HH:mm:ss.SSSS"
@@ -46,70 +45,39 @@
       (is (= (path->spec naming-convention ["2019-04-21" "error.log.gz"])
              {:ts 1555804800000 :name "error" :ext "log.gz"})))))
 
-(def context-tests
-  "Uses each :context to perform io on / between each of :file-specs. If
-  :in-contexts is provided, checks that the :file-specs point to the paths
-  specified by :in-contexts."
-  {"default naming convention"
-   {:context    (local-context)
-    :file-specs [(-> (File/createTempFile "schemata-test" ".txt" (io/file "."))
-                     .getCanonicalPath)
-                 (-> (File/createTempFile "schemata-test" ".txt" (io/file "."))
-                     .getCanonicalPath)]}
-   "custom naming convention"
-   ;; E.g. ticker/Bitstamp_2019-04-21.log
-   (let [naming (path-convention
-                  :type
-                  (file-convention
-                    (split-by "_" :name (utc :ts "yyyy-MM-dd"))
-                    "log"))]
+(deftest context-test
+  ;; Test with no naming convention
+  (let [ctx (local-context "schemata-test")]
+    (test-with
+      {:context ctx
+       :spec "file-a.txt"
+       :resolved (.getCanonicalPath (io/file "schemata-test" "file-a.txt"))
+       :desc "local context / default naming"}
+      {:context ctx
+       :spec "file-b.txt"
+       :resolved (.getCanonicalPath (io/file "schemata-test" "file-b.txt"))
+       :desc "local context / default naming"}))
 
-     {:context        (local-context "schemata-test" naming)
-      :file-specs     [{:ts 1555804800000 :type "ticker" :name "Bitstamp"}
-                       {:ts 1555891200000 :type "ticker" :name "Bitstamp"}]
-      :in-contexts    [(.getCanonicalPath
-                         (io/file "schemata-test/ticker/Bitstamp_2019-04-21.log"))
-                       (.getCanonicalPath
-                         (io/file "schemata-test/ticker/Bitstamp_2019-04-22.log"))]
-      :test-discover? true
-      :clean-up       (fn []
-                        (.delete (io/file "schemata-test/ticker"))
-                        (.delete (io/file "schemata-test")))})})
-
-(deftest local-context-test
-  (doseq [[test-desc {:keys [context file-specs in-contexts test-discover? clean-up]}]
-          context-tests]
-    (let [[tmp-1 tmp-2] file-specs]
-      (testing (format "Local context IO works with %s." test-desc)
-        (println (format "\ntesting local context IO with %s" test-desc))
-        (testing "(read/write)"
-          (println "writing to" (in-context context tmp-1))
-          (spit (io context tmp-1) "foo\n")
-          (spit (io context tmp-1) "bar\n" :append true)
-          (println "reading from" (in-context context tmp-1))
-          (is (= (slurp (io context tmp-1)) "foo\nbar\n")))
-        (testing "(copy)"
-          (println "copying" (in-context context tmp-1) "to" (in-context context tmp-2))
-          (copy tmp-1 tmp-2 context context)
-          (is (= (slurp (io context tmp-1))
-                 (slurp (io context tmp-2))
-                 "foo\nbar\n")))
-        (when (not-empty in-contexts)
-          (testing "(path rendering)"
-            (is (= (in-context context tmp-1) (first in-contexts)))
-            (is (= (in-context context tmp-2) (second in-contexts)))))
-        (when test-discover?
-          (testing "(discovery)"
-            (is (= (sort-by :ts (list context)) file-specs))))
-        (testing "(delete)"
-          (println "deleting" (in-context context tmp-1))
-          (delete context tmp-1)
-          (println "deleting" (in-context context tmp-2))
-          (delete context tmp-2)
-          (is (not (.isFile (io/file (in-context context tmp-1)))))
-          (is (not (.isFile (io/file (in-context context tmp-2))))))
-        (when clean-up
-          (clean-up))))))
+  ;; With naming convention like ticker/Bitstamp_2019-04-21.log
+  (let [naming (path-convention
+                 :type
+                 (file-convention
+                   (split-by "_" :name (utc :ts "yyyy-MM-dd"))
+                   "log"))
+        ctx (local-context "schemata-test" naming)]
+    (test-with
+      {:context ctx
+       :spec {:ts 1555804800000 :type "ticker" :name "Bitstamp"}
+       :resolved (.getCanonicalPath
+                   (io/file
+                     "schemata-test" "ticker" "Bitstamp_2019-04-21.log"))
+       :desc "local context / custom naming"}
+      {:context ctx
+       :spec {:ts 1555891200000 :type "ticker" :name "Bitstamp"}
+       :resolved (.getCanonicalPath
+                   (io/file
+                     "schemata-test" "ticker" "Bitstamp_2019-04-22.log"))
+       :desc "local context / custom naming"})))
 
 (comment
   (run-tests))
