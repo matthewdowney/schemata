@@ -358,16 +358,24 @@
               (is (= size 8) "8 bytes written.")))))))
 
   (testing "File discovery"
-    (if (= (:context file-a) (:context file-b))
-      (let [discovered (set (list (:context file-a)))]
-        (println "Discovered files" discovered)
-        (is (= discovered (set (map :spec [file-a file-b])))))
-      (let [discovered-a (set (list (:context file-a)))
-            discovered-b (set (list (:context file-b)))]
-        (println "Discovered files" discovered-a)
-        (is (= discovered-a #{(:spec file-a)}))
-        (println "Discovered files" discovered-b)
-        (is (= discovered-b #{(:spec file-b)})))))
+    (let [;; Trim the contents of discovered file specs to keep only
+          ;; the keys in the original spec: it's okay if discover
+          ;; includes extra keys, but not okay if it leaves out keys.
+          trim-discovered
+          (fn [discovered {:keys [spec]}]
+            (if (map? spec)
+              (into #{} (map #(select-keys % (keys spec))) discovered)
+              (into #{} discovered)))]
+      (if (= (:context file-a) (:context file-b))
+        (let [discovered (trim-discovered (list (:context file-a)) file-a)]
+          (println "Discovered files" discovered)
+          (is (= discovered (set (map :spec [file-a file-b])))))
+        (let [discovered-a (trim-discovered (list (:context file-a)) file-a)
+              discovered-b (trim-discovered (list (:context file-b)) file-b)]
+          (println "Discovered files" discovered-a)
+          (is (= discovered-a #{(:spec file-a)}))
+          (println "Discovered files" discovered-b)
+          (is (= discovered-b #{(:spec file-b)}))))))
 
   (testing "Copying"
     ;; Test copying in both directions

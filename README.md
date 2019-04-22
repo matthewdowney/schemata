@@ -2,12 +2,30 @@
 
 A utility for abstracting away names and places for file-like data storage.
 
+---
+
+Lein (Uses [Break Versioning](https://github.com/ptaoussanis/encore/blob/master/BREAK-VERSIONING.md)):
+```
+[org.clojars.mjdowney/schemata "1.0.0"]
+```
+
+Run tests with
+```
+lein test
+```
+
+---
+
 I originally wrote this for use with a market data collection server that 
 produced thousands of flat files per day — each named to indicate the trading 
 venue, market, type of market, and day of collection — and syncd them to S3. At 
 a certain point I needed to be able to discover and read the files in, gzip/unzip 
 arbitrary subsets of the files, and store them on S3 with a different naming 
-convention than the one used locally.
+convention than the one used locally, so I decided to formalize the logic I had
+implemented in a way that's generally usable.
+
+(Check out the [S3 context implementation](https://github.com/matthewdowney/schemata-s3) 
+to use with syncing files.)
 
 ---
 
@@ -79,12 +97,12 @@ where you name things `yyyy/MM/log-type.yyyy-MM-dd.log`, just as easily as you'd
 ;; (Make sure the naming & context from the intro are still defined)
 
 ;; Maybe we want to migrate to a new naming convention of
-;; root-dir/yyyy/log-type_MMM-dd.log
+;; root-dir/yyyy/log-type_yyMMdd.log
 (def new-naming
   (s/path-convention
     (s/utc :ts "yyyy")
     (s/file-convention
-      (s/split-by "_" :log-type (s/utc :ts "MMM-dd"))
+      (s/split-by "_" :log-type (s/utc :ts "yyMMdd"))
       "log")))
       
 ;; We'll keep the files local here, but realistically this 
@@ -106,8 +124,6 @@ where you name things `yyyy/MM/log-type.yyyy-MM-dd.log`, just as easily as you'd
   (println "Moved" old-file))
 ; => Moved {:ts 1555632000000, :log-type info}
 ```
-
-Check out the [S3]() context implementation to use with syncing files.
 
 Near-term plans include adding a `gzip` function that modifies a context,
 so that you could gzip files by writing to `(gzip context)` or read 

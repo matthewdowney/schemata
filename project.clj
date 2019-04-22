@@ -2,4 +2,5 @@
   :description "A utility for abstracting away names and places for file-like data storage."
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
+  :url "https://github.com/matthewdowney/schemata"
   :dependencies [[org.clojure/clojure "1.10.0"]])
